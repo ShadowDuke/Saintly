@@ -49,25 +49,23 @@ void __stdcall RVExtension(char *output, int outputSize, const char *function)
 
 	outputSize -= 1;
 	string input(function);
-	size_t cmdIndex = input.find_first_of(':');
-	size_t instanceIndex = input.find_last_of(':');
+	size_t cmdIndex = input.find_first_of(',');
 	string command(input.begin(), input.begin() + cmdIndex);
-	string instance(input.begin() + cmdIndex + 1, input.begin() + instanceIndex);	
-	string query(input.begin() + instanceIndex + 1, input.end());
-	logFile << "Instance: " << instance << " Command: " << command << " Payload: \"" << query << "\"" << std::endl;
+	string query(input.begin() + (cmdIndex + 1), input.end());
+	logFile << "COMMAND: " << command << " PAYLOAD: \"" << query << "\"" << std::endl;
 
 	if (!_connected)
 	{
 		//Current directory is ArmA 2 server directory
 		GetCurrentDirectoryA(250, config.currentDir);
 
-		//Read config files from saintly.ini
-		sprintf(config.currentDir, "%s\\saintly.ini", config.currentDir);
-		GetPrivateProfileStringA(instance.c_str(), "username", "dayz", config.dbuser, 100, config.currentDir);
-		GetPrivateProfileStringA(instance.c_str(), "password", "dayzpass", config.dbpass, 100, config.currentDir);
-		GetPrivateProfileStringA(instance.c_str(), "database", "dayz", config.dbname, 100, config.currentDir);
-		GetPrivateProfileStringA(instance.c_str(), "hostname", "127.0.0.1", config.dbhost, 100, config.currentDir);
-		config.dbport = GetPrivateProfileIntA(instance.c_str(), "port", 3306, config.currentDir);
+		//Read config files from bliss.ini
+		sprintf(config.currentDir, "%s\\bliss.ini", config.currentDir);
+		GetPrivateProfileStringA("database", "username", "dayz", config.dbuser, 100, config.currentDir);
+		GetPrivateProfileStringA("database", "password", "dayzpass", config.dbpass, 100, config.currentDir);
+		GetPrivateProfileStringA("database", "database", "dayz", config.dbname, 100, config.currentDir);
+		GetPrivateProfileStringA("database", "hostname", "127.0.0.1", config.dbhost, 100, config.currentDir);
+		config.dbport = GetPrivateProfileIntA("database", "port", 3306, config.currentDir);
 
 		if (mysql_init(&_mysqlR) == NULL)
 		{
@@ -96,14 +94,14 @@ void __stdcall RVExtension(char *output, int outputSize, const char *function)
 		logFile << "MAIN: worker thread created" << std::endl;
 	}
 
-	if (command == "E")
+	if (command == "execute")
 	{
 		boost::unique_lock<boost::mutex> lock(_stmtQueueMutex);
 		_stmtQueue.push(query);
 		logFile << "MAIN: waking up worker" << std::endl;
 		_stmtQueueCond.notify_one();
 	}
-	else if (command == "Q")
+	else if (command == "query")
 	{
 		MYSQL_ROW row;
 		int status = mysql_real_query(&_mysqlR, query.c_str(), query.length());
