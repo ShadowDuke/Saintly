@@ -17,11 +17,8 @@
 #include <mysql.h>
 #pragma comment(lib, "libmysql.lib")
 
-#include <iostream>
-#include <sstream>
 #include <vector>
 #include <queue>
 #include <string>
-#include <fstream>
 
 #include "config.h"

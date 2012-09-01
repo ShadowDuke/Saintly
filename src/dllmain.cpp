@@ -10,6 +10,15 @@ using std::cout;
 using std::queue;
 using std::fstream;
 
+#include <log4cplus/logger.h>
+#include <log4cplus/loggingmacros.h>
+#include <log4cplus/configurator.h>
+#include <iomanip>
+
+using namespace log4cplus;
+
+#define LOG4CPLUS_BUILD_DLL
+
 MYSQL _mysqlR;
 bool _connected  = false;
 bool _working = false;
@@ -18,7 +27,6 @@ queue <string> _stmtQueue;
 boost::mutex _stmtQueueMutex;
 boost::condition_variable _stmtQueueCond;
 boost::thread worker;
-fstream logFile;
 
 void mysqlCUDThread();
 
@@ -42,48 +50,56 @@ extern "C"
 
 void __stdcall RVExtension(char *output, int outputSize, const char *function)
 {
-	if (!logFile.is_open())
-	{
-		logFile.open("logfile.log", std::ios_base::app);
-	}
+	PropertyConfigurator logConfig("log4cplus.properties");
+	logConfig.configure();
+    Logger logger = Logger::getInstance("main");
 
 	outputSize -= 1;
 	string input(function);
-	size_t cmdIndex = input.find_first_of(',');
+	size_t cmdIndex = input.find_first_of(':');
+	size_t instanceIndex = input.find_last_of(':');
 	string command(input.begin(), input.begin() + cmdIndex);
-	string query(input.begin() + (cmdIndex + 1), input.end());
-	logFile << "COMMAND: " << command << " PAYLOAD: \"" << query << "\"" << std::endl;
+	string instance(input.begin() + cmdIndex + 1, input.begin() + instanceIndex);	
+	string query(input.begin() + instanceIndex + 1, input.end());
+	LOG4CPLUS_INFO(logger, "" + instance + " command " + command + ": " + query);
 
 	if (!_connected)
 	{
 		//Current directory is ArmA 2 server directory
 		GetCurrentDirectoryA(250, config.currentDir);
 
-		//Read config files from bliss.ini
-		sprintf(config.currentDir, "%s\\bliss.ini", config.currentDir);
-		GetPrivateProfileStringA("database", "username", "dayz", config.dbuser, 100, config.currentDir);
-		GetPrivateProfileStringA("database", "password", "dayzpass", config.dbpass, 100, config.currentDir);
-		GetPrivateProfileStringA("database", "database", "dayz", config.dbname, 100, config.currentDir);
-		GetPrivateProfileStringA("database", "hostname", "127.0.0.1", config.dbhost, 100, config.currentDir);
-		config.dbport = GetPrivateProfileIntA("database", "port", 3306, config.currentDir);
+		//Read config files from saintly.ini
+		sprintf_s(config.currentDir, "%s\\saintly.ini", config.currentDir);
+		GetPrivateProfileStringA(instance.c_str(), "username", "dayz", config.dbuser, 100, config.currentDir);
+		GetPrivateProfileStringA(instance.c_str(), "password", "dayzpass", config.dbpass, 100, config.currentDir);
+		GetPrivateProfileStringA(instance.c_str(), "database", "dayz", config.dbname, 100, config.currentDir);
+		GetPrivateProfileStringA(instance.c_str(), "hostname", "127.0.0.1", config.dbhost, 100, config.currentDir);
+		config.dbport = GetPrivateProfileIntA(instance.c_str(), "port", 3306, config.currentDir);
 
 		if (mysql_init(&_mysqlR) == NULL)
 		{
-			logFile << "MAIN: mysql_init() error" << std::endl;
+			LOG4CPLUS_INFO(logger, "mysql_init() error");
 			return;
 		}
 		else
 		{
+			my_bool reconnect = 1;
+			mysql_options(&_mysqlR, MYSQL_OPT_RECONNECT, &reconnect);
 			if (!mysql_real_connect(&_mysqlR, config.dbhost, config.dbuser, config.dbpass, config.dbname, config.dbport, nullptr, CLIENT_MULTI_RESULTS))
 			{
-				logFile << "MAIN: mysql_real_connect() error - " << mysql_errno(&_mysqlR) + " - " << mysql_error(&_mysqlR) << std::endl;
+				LOG4CPLUS_ERROR(logger, "mysql_real_connect() error - " << mysql_errno(&_mysqlR) << " - " << mysql_error(&_mysqlR));
 				return;
 			}
 			else
 			{
-				logFile << "MAIN: mysql connected" << std::endl;
+				LOG4CPLUS_INFO(logger, "mysql connected");
 				_connected = true;
 			}
+		}
+	} else {
+		int status = mysql_ping(&_mysqlR);
+		if (status > 0) {
+			LOG4CPLUS_ERROR(logger, "mysql_ping() error - " << mysql_errno(&_mysqlR) << " - " << mysql_error(&_mysqlR));
 		}
 	}
 
@@ -91,21 +107,21 @@ void __stdcall RVExtension(char *output, int outputSize, const char *function)
 	{
 		worker = boost::thread(boost::bind(&mysqlCUDThread));
 		_working = true;
-		logFile << "MAIN: worker thread created" << std::endl;
+		LOG4CPLUS_DEBUG(logger, "worker thread created");
 	}
 
-	if (command == "execute")
+	if (command == "E")
 	{
 		boost::unique_lock<boost::mutex> lock(_stmtQueueMutex);
 		_stmtQueue.push(query);
-		logFile << "MAIN: waking up worker" << std::endl;
+		LOG4CPLUS_TRACE(logger, "waking up worker");
 		_stmtQueueCond.notify_one();
 	}
-	else if (command == "query")
+	else if (command == "Q")
 	{
 		MYSQL_ROW row;
 		int status = mysql_real_query(&_mysqlR, query.c_str(), query.length());
-		logFile << "MAIN: mysql_real_query()" << std::endl;
+		LOG4CPLUS_DEBUG(logger, "mysql_real_query()");
 		do
 		{
 			MYSQL_RES *res = mysql_store_result(&_mysqlR);
@@ -148,7 +164,7 @@ void __stdcall RVExtension(char *output, int outputSize, const char *function)
 			{
 				if (mysql_field_count(&_mysqlR) != 0)
 				{
-					logFile << "MAIN: mysql_store_result() error - " << mysql_errno(&_mysqlR) + " - " << mysql_error(&_mysqlR) << std::endl;
+					LOG4CPLUS_ERROR(logger, "mysql_store_result() error - " << mysql_errno(&_mysqlR) << " - " << mysql_error(&_mysqlR));
 				}
 				else
 				{
@@ -163,22 +179,28 @@ void __stdcall RVExtension(char *output, int outputSize, const char *function)
 
 void mysqlCUDThread()
 {
+	PropertyConfigurator logConfig("log4cplus.properties");
+	logConfig.configure();
+	Logger logger = Logger::getInstance("work");
+
 	MYSQL _mysqlCUD;
 	if (mysql_init(&_mysqlCUD) == NULL)
 	{
-		logFile << "WORKER: mysql_init() error" << std::endl;
+		LOG4CPLUS_ERROR(logger, "mysql_init() error");
 		return;
 	}
 	else
 	{
+		my_bool reconnect = 1;
+		mysql_options(&_mysqlCUD, MYSQL_OPT_RECONNECT, &reconnect);
 		if (!mysql_real_connect(&_mysqlCUD, config.dbhost, config.dbuser, config.dbpass, config.dbname, config.dbport, nullptr, CLIENT_MULTI_RESULTS))
 		{
-			logFile << "WORKER: mysql_real_connect() error - " << mysql_errno(&_mysqlCUD) + " - " << mysql_error(&_mysqlCUD) << std::endl;
+			LOG4CPLUS_ERROR(logger, "mysql_real_connect() error - " << mysql_errno(&_mysqlCUD) << " - " << mysql_error(&_mysqlCUD));
 			return;
 		}
 		else
 		{
-			logFile << "WORKER: mysql connected" << std::endl;
+			LOG4CPLUS_INFO(logger, "mysql connected");
 		}
 	}
 
@@ -190,14 +212,19 @@ void mysqlCUDThread()
 		{
 			_stmtQueueCond.wait(lock);
 		}
-		logFile << "WORKER: woken up" << std::endl;
+		LOG4CPLUS_TRACE(logger, "woken up");
 
 		//Empty the queue
 		while (!_stmtQueue.empty()) {
 			string issue = _stmtQueue.front();
 
+			int status = mysql_ping(&_mysqlCUD);
+			if (status > 0) {
+				LOG4CPLUS_ERROR(logger, "mysql_ping() error - " << mysql_errno(&_mysqlCUD) << " - " << mysql_error(&_mysqlCUD));
+			}
+
 			mysql_real_query(&_mysqlCUD, issue.c_str(), issue.length());
-			logFile << "WORKER: mysql_real_query()" << std::endl;
+			LOG4CPLUS_DEBUG(logger, "mysql_real_query()");
 
 			//Discard any results
 			MYSQL_RES *res = mysql_store_result(&_mysqlCUD);
@@ -207,6 +234,6 @@ void mysqlCUDThread()
 			_stmtQueue.pop();
 		}
 
-		logFile << "WORKER: sleeping" << std::endl;
+		LOG4CPLUS_TRACE(logger, "sleeping");
 	}
 }
